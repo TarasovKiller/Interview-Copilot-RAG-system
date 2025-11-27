@@ -1,0 +1,194 @@
+Redis и кэширование
+1️⃣ Как кратко ответить
+Redis (Remote Dictionary Server) — это высокопроизводительное in-memory хранилище данных, которое используется для кэширования, управления сессиями, очередей сообщений и pub/sub. Redis хранит данные в оперативной памяти, что обеспечивает скорость операций менее 1 мс. Кэширование позволяет сохранять часто запрашиваемые данные для быстрого доступа, снижая нагрузку на базу данных и ускоряя ответы API.
+
+2️⃣ Подробное объяснение темы
+Зачем нужно кэширование?
+Кэширование решает проблему производительности:
+
+Снижает нагрузку на БД: Частые запросы обслуживаются из кэша
+Ускоряет ответы: Данные из памяти возвращаются мгновенно
+Экономит ресурсы: Меньше вычислений для повторяющихся операций
+Повышает масштабируемость: Система выдерживает больше нагрузки
+
+Установка и подключение:
+
+# pip install redis
+import redis
+import json
+from typing import Optional, Any
+​
+# Синхронное подключение
+redis_client = redis.Redis(
+    host='localhost',
+    port=6379,
+    db=0,
+    decode_responses=True  # Автоматическое декодирование в строки
+)
+​
+# Проверка подключения
+redis_client.ping()  # Вернёт True, если подключение успешно
+
+Базовые операции с Redis:
+
+# Строки (Strings)
+redis_client.set("user:1:name", "Иван")
+name = redis_client.get("user:1:name")  # "Иван"
+​
+# С временем жизни (TTL)
+redis_client.setex("session:abc123", 3600, "user_data")  # 1 час
+​
+# Инкремент/декремент
+redis_client.set("page_views", 0)
+redis_client.incr("page_views")  # 1
+redis_client.incrby("page_views", 10)  # 11
+​
+# Хэши (Hashes) — для объектов
+redis_client.hset("user:1", mapping={
+    "name": "Иван",
+    "email": "ivan@example.com",
+    "age": "25"
+})
+user = redis_client.hgetall("user:1")  # {'name': 'Иван', ...}
+​
+# Списки (Lists) — для очередей
+redis_client.lpush("tasks", "task1", "task2")
+task = redis_client.rpop("tasks")  # "task1"
+​
+# Множества (Sets) — уникальные значения
+redis_client.sadd("online_users", "user1", "user2", "user3")
+is_online = redis_client.sismember("online_users", "user1")  # True
+
+Паттерн кэширования Cache-Aside:
+
+def get_user_cached(user_id: int) -> Optional[dict]:
+    """Получить пользователя с кэшированием."""
+    cache_key = f"user:{user_id}"
+    
+    # 1. Проверяем кэш
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
+        return json.loads(cached_data)
+    
+    # 2. Если нет в кэше — получаем из БД
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+    
+    user_data = {"id": user.id, "name": user.name, "email": user.email}
+    
+    # 3. Сохраняем в кэш
+    redis_client.setex(cache_key, 3600, json.dumps(user_data))
+    
+    return user_data
+​
+def invalidate_user_cache(user_id: int):
+    """Инвалидация кэша при изменении данных."""
+    redis_client.delete(f"user:{user_id}")
+
+Декоратор для кэширования:
+
+import functools
+import hashlib
+​
+def cached(ttl: int = 300, prefix: str = "cache"):
+    """Декоратор для кэширования результатов функции."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # Создаём уникальный ключ из аргументов
+            key_data = f"{func.__name__}:{args}:{kwargs}"
+            cache_key = f"{prefix}:{hashlib.md5(key_data.encode()).hexdigest()}"
+            
+            # Проверяем кэш
+            cached_result = redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
+            
+            # Выполняем функцию
+            result = func(*args, **kwargs)
+            
+            # Кэшируем результат
+            redis_client.setex(cache_key, ttl, json.dumps(result))
+            
+            return result
+        return wrapper
+    return decorator
+​
+@cached(ttl=600)
+def get_expensive_report(report_type: str, year: int):
+    """Тяжёлый отчёт, который кэшируется на 10 минут."""
+    # Долгие вычисления...
+    return generate_report(report_type, year)
+
+Асинхронный Redis:
+
+# pip install redis[hiredis]
+import redis.asyncio as aioredis
+​
+async def get_async_redis():
+    return await aioredis.from_url(
+        "redis://localhost:6379",
+        encoding="utf-8",
+        decode_responses=True
+    )
+​
+async def get_user_async(user_id: int):
+    redis = await get_async_redis()
+    cache_key = f"user:{user_id}"
+    
+    cached = await redis.get(cache_key)
+    if cached:
+        return json.loads(cached)
+    
+    user = await fetch_user_from_db(user_id)
+    await redis.setex(cache_key, 3600, json.dumps(user))
+    
+    return user
+
+Pub/Sub для real-time обновлений:
+
+# Publisher
+def publish_event(channel: str, message: dict):
+    redis_client.publish(channel, json.dumps(message))
+​
+# Subscriber
+def subscribe_to_events():
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe("notifications")
+    
+    for message in pubsub.listen():
+        if message["type"] == "message":
+            data = json.loads(message["data"])
+            process_notification(data)
+
+Стратегии инвалидации кэша:
+
+TTL (Time To Live): Автоматическое истечение по времени
+Write-Through: Обновление кэша при каждой записи в БД
+Write-Behind: Асинхронное обновление кэша
+Cache-Aside: Ленивая загрузка при запросе
+
+# Write-Through пример
+def update_user(user_id: int, data: dict):
+    # Обновляем БД
+    db.query(User).filter(User.id == user_id).update(data)
+    db.commit()
+    
+    # Сразу обновляем кэш
+    user = db.query(User).filter(User.id == user_id).first()
+    redis_client.setex(
+        f"user:{user_id}",
+        3600,
+        json.dumps(user.to_dict())
+    )
+
+Где применяется Redis?
+
+Кэширование API: Хранение ответов частых запросов
+Сессии пользователей: Быстрый доступ к данным сессии
+Rate Limiting: Ограничение количества запросов
+Очереди задач: Backend для Celery
+Leaderboards: Рейтинги в играх и приложениях
+Real-time аналитика: Счётчики и метрики
+

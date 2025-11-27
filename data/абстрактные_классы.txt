@@ -1,0 +1,202 @@
+Абстрактные классы и интерфейсы в Python
+1️⃣ Как кратко ответить
+Абстрактный класс в Python — это класс, который содержит один или более абстрактных методов (методов без реализации) и не может быть инстанциирован напрямую. Абстрактные классы создаются с помощью модуля abc (Abstract Base Classes) и служат шаблонами для дочерних классов, определяя общий интерфейс. Любой класс, наследующий абстрактный класс, обязан реализовать все абстрактные методы.
+
+2️⃣ Подробное объяснение темы
+Что такое абстрактный класс?
+Абстрактный класс — это класс, который предназначен для наследования и не может существовать сам по себе. Он определяет "контракт" — набор методов, которые должны быть реализованы в дочерних классах.
+
+Зачем нужны абстрактные классы?
+Абстрактные классы помогают:
+
+Определить общий интерфейс: Все наследники гарантированно имеют определённые методы
+Предотвратить ошибки: Невозможно забыть реализовать важный метод
+Документировать архитектуру: Абстрактный класс показывает, что ожидается от наследников
+Следовать принципам SOLID: Особенно принципу подстановки Лисков
+
+Создание абстрактного класса:
+
+from abc import ABC, abstractmethod
+​
+class Shape(ABC):
+    @abstractmethod
+    def area(self):
+        """Вычисляет площадь фигуры."""
+        pass
+    
+    @abstractmethod
+    def perimeter(self):
+        """Вычисляет периметр фигуры."""
+        pass
+​
+# shape = Shape()  # TypeError: Can't instantiate abstract class
+
+Реализация абстрактного класса:
+
+class Rectangle(Shape):
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+    
+    def area(self):
+        return self.width * self.height
+    
+    def perimeter(self):
+        return 2 * (self.width + self.height)
+​
+class Circle(Shape):
+    def __init__(self, radius):
+        self.radius = radius
+    
+    def area(self):
+        return 3.14159 * self.radius ** 2
+    
+    def perimeter(self):
+        return 2 * 3.14159 * self.radius
+​
+rect = Rectangle(5, 3)
+circle = Circle(4)
+​
+print(f"Площадь прямоугольника: {rect.area()}")  # Вывод: 15
+print(f"Площадь круга: {circle.area()}")          # Вывод: 50.26544
+
+Неполная реализация вызовет ошибку:
+
+class Triangle(Shape):
+    def __init__(self, base, height):
+        self.base = base
+        self.height = height
+    
+    def area(self):
+        return 0.5 * self.base * self.height
+    
+    # perimeter не реализован!
+​
+# triangle = Triangle(4, 3)  # TypeError!
+
+Абстрактные свойства:
+Можно создавать абстрактные свойства с помощью комбинации декораторов:
+
+from abc import ABC, abstractmethod
+​
+class Vehicle(ABC):
+    @property
+    @abstractmethod
+    def max_speed(self):
+        """Максимальная скорость транспортного средства."""
+        pass
+    
+    @abstractmethod
+    def start_engine(self):
+        pass
+​
+class Car(Vehicle):
+    @property
+    def max_speed(self):
+        return 200
+    
+    def start_engine(self):
+        return "Двигатель автомобиля запущен"
+​
+class Bicycle(Vehicle):
+    @property
+    def max_speed(self):
+        return 40
+    
+    def start_engine(self):
+        return "У велосипеда нет двигателя"
+​
+car = Car()
+print(f"Макс. скорость: {car.max_speed} км/ч")  # Вывод: 200
+
+Частичная реализация в абстрактном классе:
+Абстрактный класс может содержать как абстрактные, так и обычные методы:
+
+class Database(ABC):
+    def __init__(self, connection_string):
+        self.connection_string = connection_string
+        self._connected = False
+    
+    def connect(self):
+        """Общая логика подключения."""
+        print(f"Подключение к {self.connection_string}")
+        self._connected = True
+    
+    def disconnect(self):
+        """Общая логика отключения."""
+        print("Отключение от базы данных")
+        self._connected = False
+    
+    @abstractmethod
+    def execute_query(self, query):
+        """Каждая БД реализует по-своему."""
+        pass
+​
+class PostgreSQL(Database):
+    def execute_query(self, query):
+        if not self._connected:
+            raise ConnectionError("Не подключен к БД")
+        return f"PostgreSQL выполняет: {query}"
+​
+class MongoDB(Database):
+    def execute_query(self, query):
+        if not self._connected:
+            raise ConnectionError("Не подключен к БД")
+        return f"MongoDB выполняет: {query}"
+
+Интерфейсы через Protocol (Python 3.8+):
+Для duck typing можно использовать Protocol из модуля typing:
+
+from typing import Protocol
+​
+class Drawable(Protocol):
+    def draw(self) -> None:
+        ...
+​
+class Button:
+    def draw(self) -> None:
+        print("Рисуем кнопку")
+​
+class TextBox:
+    def draw(self) -> None:
+        print("Рисуем текстовое поле")
+​
+def render(element: Drawable) -> None:
+    element.draw()
+​
+# Работает без явного наследования!
+render(Button())   # Вывод: Рисуем кнопку
+render(TextBox())  # Вывод: Рисуем текстовое поле
+
+Регистрация виртуальных подклассов:
+Можно зарегистрировать класс как "виртуальный подкласс" абстрактного класса:
+
+from abc import ABC, abstractmethod
+​
+class Printable(ABC):
+    @abstractmethod
+    def print_info(self):
+        pass
+​
+@Printable.register
+class Document:
+    def print_info(self):
+        print("Информация о документе")
+​
+print(isinstance(Document(), Printable))  # Вывод: True
+
+Где применяются абстрактные классы?
+Абстрактные классы используются:
+
+Фреймворки: Определение точек расширения для пользователей
+Плагины: Стандартный интерфейс для плагинов
+Стратегии: Реализация паттерна "Стратегия"
+Репозитории: Абстракция над хранилищами данных
+Драйверы: Единый интерфейс для разных реализаций
+
+Преимущества:
+Чёткий контракт: Понятно, что должен делать класс
+Раннее обнаружение ошибок: Ошибка при создании объекта, а не при вызове метода
+Полиморфизм: Работа с разными реализациями через единый интерфейс
+Документация: Абстрактные методы служат документацией
+

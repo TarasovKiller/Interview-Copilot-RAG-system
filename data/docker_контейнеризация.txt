@@ -1,0 +1,242 @@
+Docker и контейнеризация
+1️⃣ Как кратко ответить
+Docker — это платформа для контейнеризации приложений, которая позволяет упаковать приложение вместе со всеми зависимостями в изолированный контейнер. Контейнер работает одинаково на любой машине с Docker, что решает проблему "работает на моей машине". Dockerfile описывает, как собрать образ, docker-compose.yml — как запустить несколько связанных контейнеров. Docker незаменим для разработки, тестирования и деплоя backend-приложений.
+
+2️⃣ Подробное объяснение темы
+Зачем нужен Docker?
+Docker решает проблемы:
+
+Изоляция: Приложение не зависит от окружения хоста
+Воспроизводимость: Одинаковое поведение везде
+Масштабирование: Легко запустить несколько экземпляров
+Микросервисы: Каждый сервис в своём контейнере
+CI/CD: Стандартизированные артефакты для деплоя
+
+Основные концепции:
+
+Image (Образ): Шаблон для создания контейнеров (неизменяемый)
+Container (Контейнер): Запущенный экземпляр образа
+Dockerfile: Инструкции для сборки образа
+Docker Compose: Оркестрация нескольких контейнеров
+Registry: Хранилище образов (Docker Hub)
+
+Dockerfile для Python-приложения:
+
+# Базовый образ
+FROM python:3.11-slim
+​
+# Переменные окружения
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+​
+# Рабочая директория
+WORKDIR /app
+​
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+​
+# Копирование и установка Python-зависимостей
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+​
+# Копирование кода приложения
+COPY . .
+​
+# Создание непривилегированного пользователя
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+​
+# Порт приложения
+EXPOSE 8000
+​
+# Команда запуска
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+Многоэтапная сборка (Multi-stage build):
+
+# Этап сборки
+FROM python:3.11-slim as builder
+​
+WORKDIR /app
+​
+RUN pip install --upgrade pip
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+​
+# Финальный этап
+FROM python:3.11-slim
+​
+WORKDIR /app
+​
+# Копируем собранные wheel-пакеты
+COPY --from=builder /app/wheels /wheels
+RUN pip install --no-cache /wheels/*
+​
+COPY . .
+​
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+Docker Compose для полного стека:
+
+# docker-compose.yml
+version: '3.8'
+​
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/myapp
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app  # Для разработки
+    restart: unless-stopped
+​
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: myapp
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+​
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+​
+  celery:
+    build: .
+    command: celery -A celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/myapp
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+​
+volumes:
+  postgres_data:
+  redis_data:
+
+Основные команды Docker:
+
+# Сборка образа
+docker build -t myapp:latest .
+​
+# Запуск контейнера
+docker run -d -p 8000:8000 --name myapp myapp:latest
+​
+# Просмотр контейнеров
+docker ps
+docker ps -a  # Включая остановленные
+​
+# Логи контейнера
+docker logs myapp
+docker logs -f myapp  # Follow
+​
+# Выполнение команды в контейнере
+docker exec -it myapp bash
+docker exec myapp python manage.py migrate
+​
+# Остановка и удаление
+docker stop myapp
+docker rm myapp
+​
+# Очистка неиспользуемых ресурсов
+docker system prune -a
+
+Команды Docker Compose:
+
+# Запуск всех сервисов
+docker-compose up -d
+​
+# Сборка и запуск
+docker-compose up -d --build
+​
+# Просмотр логов
+docker-compose logs -f app
+​
+# Остановка
+docker-compose down
+​
+# Остановка с удалением томов
+docker-compose down -v
+​
+# Масштабирование
+docker-compose up -d --scale celery=3
+
+.dockerignore файл:
+
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.env
+.venv
+venv
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+tests/
+.pytest_cache
+.coverage
+htmlcov
+
+Healthcheck:
+
+# В Dockerfile
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+​
+# В docker-compose.yml
+services:
+  app:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+Переменные окружения и секреты:
+
+# .env файл
+DATABASE_URL=postgresql://user:password@db:5432/myapp
+SECRET_KEY=your-secret-key
+DEBUG=false
+​
+# docker-compose.yml
+services:
+  app:
+    env_file:
+      - .env
+    environment:
+      - OVERRIDE_VAR=value
+
+Где применяется Docker?
+
+Разработка: Единое окружение для команды
+Тестирование: Изолированные тесты в CI/CD
+Staging/Production: Предсказуемые деплои
+Микросервисы: Независимые сервисы в контейнерах
+Локальная инфраструктура: БД, Redis, Elasticsearch
+

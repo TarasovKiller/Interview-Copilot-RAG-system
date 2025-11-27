@@ -1,0 +1,234 @@
+Celery и очереди задач
+1️⃣ Как кратко ответить
+Celery — это распределённая система очередей задач для Python, которая позволяет выполнять задачи асинхронно в фоновом режиме. Celery использует брокер сообщений (Redis или RabbitMQ) для передачи задач между производителями и воркерами. Это идеальное решение для обработки долгих операций (отправка email, генерация отчётов, обработка изображений) без блокировки основного приложения.
+
+2️⃣ Подробное объяснение темы
+Зачем нужны очереди задач?
+Очереди задач решают проблемы:
+
+Долгие операции: Не заставляют пользователя ждать
+Масштабирование: Задачи распределяются между воркерами
+Надёжность: Задачи не теряются при сбоях
+Планирование: Выполнение по расписанию
+
+Архитектура Celery:
+
+Producer (Приложение) → Broker (Redis/RabbitMQ) → Worker (Celery) → Backend (Результаты)
+
+Установка и настройка:
+
+# pip install celery[redis]
+# celery_app.py
+from celery import Celery
+​
+app = Celery(
+    'tasks',
+    broker='redis://localhost:6379/0',
+    backend='redis://localhost:6379/1'
+)
+​
+# Конфигурация
+app.conf.update(
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='Europe/Moscow',
+    enable_utc=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 минут максимум
+    worker_prefetch_multiplier=1,
+)
+
+Создание задач:
+
+from celery_app import app
+import time
+​
+@app.task
+def add(x: int, y: int) -> int:
+    """Простая задача сложения."""
+    return x + y
+​
+@app.task(bind=True, max_retries=3)
+def send_email(self, to: str, subject: str, body: str):
+    """Отправка email с повторными попытками."""
+    try:
+        # Логика отправки email
+        email_service.send(to=to, subject=subject, body=body)
+        return {"status": "sent", "to": to}
+    except ConnectionError as exc:
+        # Повторная попытка через 60 секунд
+        raise self.retry(exc=exc, countdown=60)
+​
+@app.task(bind=True)
+def process_image(self, image_path: str):
+    """Обработка изображения с обновлением прогресса."""
+    self.update_state(state='PROCESSING', meta={'progress': 0})
+    
+    # Шаг 1: Загрузка
+    image = load_image(image_path)
+    self.update_state(state='PROCESSING', meta={'progress': 25})
+    
+    # Шаг 2: Обработка
+    processed = apply_filters(image)
+    self.update_state(state='PROCESSING', meta={'progress': 75})
+    
+    # Шаг 3: Сохранение
+    result_path = save_image(processed)
+    self.update_state(state='PROCESSING', meta={'progress': 100})
+    
+    return {"result_path": result_path}
+
+Вызов задач:
+
+# Асинхронный вызов (немедленно возвращает AsyncResult)
+result = add.delay(4, 6)
+print(result.id)  # ID задачи: 'a1b2c3d4-...'
+​
+# Проверка статуса
+print(result.status)  # 'PENDING', 'STARTED', 'SUCCESS', 'FAILURE'
+​
+# Получение результата (блокирующий вызов)
+value = result.get(timeout=10)  # 10
+​
+# Альтернативный синтаксис
+result = add.apply_async(args=[4, 6], countdown=10)  # Выполнить через 10 сек
+​
+# С указанием времени
+from datetime import datetime, timedelta
+eta = datetime.utcnow() + timedelta(hours=1)
+result = send_email.apply_async(
+    args=['user@example.com', 'Тема', 'Текст'],
+    eta=eta  # Выполнить через 1 час
+)
+
+Интеграция с FastAPI:
+
+from fastapi import FastAPI, BackgroundTasks
+from celery.result import AsyncResult
+from tasks import send_email, process_image
+​
+app = FastAPI()
+​
+@app.post("/send-notification")
+def send_notification(email: str, message: str):
+    """Отправить уведомление асинхронно."""
+    task = send_email.delay(email, "Уведомление", message)
+    return {"task_id": task.id, "status": "queued"}
+​
+@app.get("/task/{task_id}")
+def get_task_status(task_id: str):
+    """Проверить статус задачи."""
+    result = AsyncResult(task_id)
+    
+    response = {
+        "task_id": task_id,
+        "status": result.status,
+    }
+    
+    if result.status == 'SUCCESS':
+        response["result"] = result.result
+    elif result.status == 'FAILURE':
+        response["error"] = str(result.result)
+    elif result.status == 'PROCESSING':
+        response["progress"] = result.info.get('progress', 0)
+    
+    return response
+
+Цепочки и группы задач:
+
+from celery import chain, group, chord
+​
+# Цепочка — последовательное выполнение
+workflow = chain(
+    download_file.s(url),
+    process_file.s(),
+    upload_result.s()
+)
+result = workflow.apply_async()
+​
+# Группа — параллельное выполнение
+job = group([
+    process_image.s(f"image_{i}.jpg")
+    for i in range(10)
+])
+result = job.apply_async()
+​
+# Chord — группа + callback после завершения всех
+workflow = chord(
+    [process_chunk.s(chunk) for chunk in chunks],
+    merge_results.s()
+)
+result = workflow.apply_async()
+
+Периодические задачи (Celery Beat):
+
+from celery.schedules import crontab
+​
+app.conf.beat_schedule = {
+    # Каждую минуту
+    'check-health-every-minute': {
+        'task': 'tasks.health_check',
+        'schedule': 60.0,
+    },
+    # Каждый день в 8:00
+    'daily-report': {
+        'task': 'tasks.generate_daily_report',
+        'schedule': crontab(hour=8, minute=0),
+    },
+    # Каждый понедельник в 9:00
+    'weekly-cleanup': {
+        'task': 'tasks.cleanup_old_data',
+        'schedule': crontab(hour=9, minute=0, day_of_week=1),
+    },
+}
+​
+@app.task
+def health_check():
+    """Проверка здоровья системы."""
+    check_database()
+    check_external_services()
+    return {"status": "healthy"}
+
+Запуск воркеров:
+
+# Запуск воркера
+celery -A celery_app worker --loglevel=info
+​
+# Запуск с несколькими процессами
+celery -A celery_app worker --concurrency=4
+​
+# Запуск планировщика
+celery -A celery_app beat --loglevel=info
+​
+# Воркер + планировщик вместе
+celery -A celery_app worker --beat --loglevel=info
+
+Обработка ошибок:
+
+@app.task(
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5
+)
+def reliable_task(self, data):
+    """Надёжная задача с экспоненциальным backoff."""
+    try:
+        return process_data(data)
+    except CriticalError as e:
+        # Не повторять при критических ошибках
+        raise
+    except Exception as e:
+        raise self.retry(exc=e)
+
+Где применяется Celery?
+
+Email рассылки: Массовая отправка писем
+Обработка файлов: Конвертация, сжатие, генерация
+Отчёты: Формирование сложных отчётов
+Интеграции: Синхронизация с внешними сервисами
+ML пайплайны: Обучение моделей и предсказания
+

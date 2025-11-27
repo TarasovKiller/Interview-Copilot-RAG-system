@@ -1,0 +1,258 @@
+Логирование в Python
+1️⃣ Как кратко ответить
+Логирование — это процесс записи событий и сообщений во время выполнения программы. В Python для этого используется встроенный модуль logging, который предоставляет гибкую систему уровней логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL), форматирования сообщений и вывода в различные места (консоль, файлы, внешние сервисы). Правильное логирование критически важно для отладки, мониторинга и анализа работы приложений в production.
+
+2️⃣ Подробное объяснение темы
+Зачем нужно логирование?
+Логирование помогает:
+
+Отладка: Понять, что происходит в коде
+Мониторинг: Отслеживать состояние приложения
+Аудит: Записывать важные события
+Анализ: Изучать поведение пользователей
+Диагностика: Находить причины ошибок в production
+
+Уровни логирования:
+
+import logging
+​
+# DEBUG — детальная информация для отладки
+logging.debug("Переменная x = %s", x)
+​
+# INFO — подтверждение нормальной работы
+logging.info("Пользователь %s вошёл в систему", username)
+​
+# WARNING — что-то неожиданное, но работа продолжается
+logging.warning("Диск заполнен на 90%%")
+​
+# ERROR — серьёзная проблема, функция не выполнена
+logging.error("Не удалось подключиться к базе данных")
+​
+# CRITICAL — критическая ошибка, программа может завершиться
+logging.critical("Системная ошибка, приложение остановлено")
+
+Базовая настройка:
+
+import logging
+​
+# Простая настройка
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+​
+logger = logging.getLogger(__name__)
+​
+logger.info("Приложение запущено")
+logger.error("Ошибка при обработке запроса", exc_info=True)
+
+Продвинутая конфигурация:
+
+import logging
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+import sys
+​
+def setup_logging():
+    """Настройка логирования для production."""
+    
+    # Создаём корневой логгер
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    # Формат сообщений
+    formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Консольный обработчик (INFO и выше)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # Файловый обработчик с ротацией по размеру
+    file_handler = RotatingFileHandler(
+        'app.log',
+        maxBytes=10*1024*1024,  # 10 MB
+        backupCount=5
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Отдельный файл для ошибок
+    error_handler = RotatingFileHandler(
+        'errors.log',
+        maxBytes=10*1024*1024,
+        backupCount=5
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    logger.addHandler(error_handler)
+    
+    return logger
+
+Структурированное логирование (JSON):
+
+import logging
+import json
+from datetime import datetime
+​
+class JSONFormatter(logging.Formatter):
+    """Форматтер для вывода логов в JSON."""
+    
+    def format(self, record):
+        log_data = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "line": record.lineno,
+        }
+        
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+        
+        # Дополнительные поля
+        if hasattr(record, 'user_id'):
+            log_data["user_id"] = record.user_id
+        if hasattr(record, 'request_id'):
+            log_data["request_id"] = record.request_id
+        
+        return json.dumps(log_data, ensure_ascii=False)
+​
+# Использование
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger.addHandler(handler)
+
+Контекстное логирование:
+
+import logging
+from contextvars import ContextVar
+​
+request_id_var: ContextVar[str] = ContextVar('request_id', default='-')
+​
+class ContextFilter(logging.Filter):
+    """Фильтр для добавления контекста к логам."""
+    
+    def filter(self, record):
+        record.request_id = request_id_var.get()
+        return True
+​
+# В middleware FastAPI
+from fastapi import Request
+import uuid
+​
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = str(uuid.uuid4())[:8]
+    request_id_var.set(request_id)
+    
+    logger.info(f"Начало запроса {request.method} {request.url.path}")
+    response = await call_next(request)
+    logger.info(f"Завершение запроса, статус: {response.status_code}")
+    
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+Логирование исключений:
+
+import logging
+import traceback
+​
+logger = logging.getLogger(__name__)
+​
+def process_data(data):
+    try:
+        result = risky_operation(data)
+        return result
+    except ValueError as e:
+        logger.warning("Некорректные данные: %s", e)
+        raise
+    except Exception as e:
+        logger.exception("Неожиданная ошибка при обработке данных")
+        # или
+        logger.error("Ошибка: %s\n%s", e, traceback.format_exc())
+        raise
+​
+# Декоратор для логирования
+def log_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        logger.debug("Вызов %s с args=%s, kwargs=%s", func.__name__, args, kwargs)
+        try:
+            result = func(*args, **kwargs)
+            logger.debug("Результат %s: %s", func.__name__, result)
+            return result
+        except Exception as e:
+            logger.exception("Ошибка в %s", func.__name__)
+            raise
+    return wrapper
+
+Конфигурация через словарь:
+
+import logging.config
+​
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        },
+        "json": {
+            "()": "myapp.logging.JSONFormatter"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "INFO",
+            "formatter": "standard",
+            "stream": "ext://sys.stdout"
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "json",
+            "filename": "app.log",
+            "maxBytes": 10485760,
+            "backupCount": 5
+        }
+    },
+    "loggers": {
+        "": {
+            "handlers": ["console", "file"],
+            "level": "DEBUG"
+        },
+        "uvicorn": {
+            "level": "INFO"
+        },
+        "sqlalchemy": {
+            "level": "WARNING"
+        }
+    }
+}
+​
+logging.config.dictConfig(LOGGING_CONFIG)
+
+Где применяется логирование?
+
+Веб-приложения: Логирование запросов и ответов
+Микросервисы: Распределённая трассировка
+API: Аудит действий пользователей
+Фоновые задачи: Отслеживание прогресса
+DevOps: Мониторинг и алертинг
+
+Лучшие практики:
+
+Используйте уровни правильно: DEBUG для отладки, INFO для событий
+Добавляйте контекст: request_id, user_id
+Не логируйте секреты: Пароли, токены, персональные данные
+Структурируйте логи: JSON для машинной обработки
+Настройте ротацию: Чтобы логи не заполнили диск
+

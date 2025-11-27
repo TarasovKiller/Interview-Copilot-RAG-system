@@ -1,0 +1,195 @@
+SQLAlchemy и ORM
+1️⃣ Как кратко ответить
+SQLAlchemy — это популярная Python-библиотека для работы с базами данных, которая предоставляет ORM (Object-Relational Mapping). ORM позволяет работать с базой данных через Python-объекты вместо написания SQL-запросов вручную. SQLAlchemy поддерживает множество СУБД (PostgreSQL, MySQL, SQLite) и предлагает как высокоуровневый ORM, так и низкоуровневый SQL Expression Language.
+
+2️⃣ Подробное объяснение темы
+Что такое ORM?
+ORM (Object-Relational Mapping) — это техника программирования, которая связывает объекты в коде с таблицами в базе данных. Вместо написания SQL-запросов вы работаете с Python-классами и объектами.
+
+Преимущества ORM:
+
+Абстракция от БД: Легко переключаться между разными СУБД
+Безопасность: Защита от SQL-инъекций
+Читаемость: Код на Python понятнее, чем SQL
+Поддержка: Миграции, валидация, связи между таблицами
+
+Установка и настройка:
+
+# pip install sqlalchemy
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+​
+# Подключение к базе данных
+DATABASE_URL = "postgresql://user:password@localhost/dbname"
+# Или SQLite: "sqlite:///./database.db"
+​
+engine = create_engine(DATABASE_URL, echo=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base = declarative_base()
+
+Определение моделей:
+
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean
+from sqlalchemy.orm import relationship
+from datetime import datetime
+​
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    username = Column(String(100), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связь один-ко-многим
+    posts = relationship("Post", back_populates="author")
+​
+class Post(Base):
+    __tablename__ = "posts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    content = Column(String, nullable=False)
+    published = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    author_id = Column(Integer, ForeignKey("users.id"))
+    
+    author = relationship("User", back_populates="posts")
+​
+# Создание таблиц
+Base.metadata.create_all(bind=engine)
+
+CRUD операции:
+
+# Создание сессии
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+​
+# CREATE — создание записи
+def create_user(db, email: str, username: str, password: str):
+    user = User(
+        email=email,
+        username=username,
+        hashed_password=hash_password(password)
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+​
+# READ — чтение записей
+def get_user_by_id(db, user_id: int):
+    return db.query(User).filter(User.id == user_id).first()
+​
+def get_users(db, skip: int = 0, limit: int = 100):
+    return db.query(User).offset(skip).limit(limit).all()
+​
+def get_user_by_email(db, email: str):
+    return db.query(User).filter(User.email == email).first()
+​
+# UPDATE — обновление записи
+def update_user(db, user_id: int, **kwargs):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        for key, value in kwargs.items():
+            setattr(user, key, value)
+        db.commit()
+        db.refresh(user)
+    return user
+​
+# DELETE — удаление записи
+def delete_user(db, user_id: int):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        db.delete(user)
+        db.commit()
+    return user
+
+Сложные запросы:
+
+from sqlalchemy import and_, or_, desc, func
+​
+# Фильтрация с несколькими условиями
+active_users = db.query(User).filter(
+    and_(
+        User.is_active == True,
+        User.created_at >= datetime(2024, 1, 1)
+    )
+).all()
+​
+# OR условие
+users = db.query(User).filter(
+    or_(
+        User.username.like("%admin%"),
+        User.email.like("%@company.com")
+    )
+).all()
+​
+# Сортировка
+recent_users = db.query(User).order_by(desc(User.created_at)).limit(10).all()
+​
+# Агрегация
+user_count = db.query(func.count(User.id)).scalar()
+​
+# JOIN запросы
+posts_with_authors = db.query(Post, User).join(User).filter(
+    Post.published == True
+).all()
+
+Связи между таблицами:
+
+# Один-к-одному
+class UserProfile(Base):
+    __tablename__ = "profiles"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    bio = Column(String)
+    user = relationship("User", back_populates="profile", uselist=False)
+​
+# Многие-ко-многим
+post_tags = Table(
+    "post_tags",
+    Base.metadata,
+    Column("post_id", ForeignKey("posts.id")),
+    Column("tag_id", ForeignKey("tags.id"))
+)
+​
+class Tag(Base):
+    __tablename__ = "tags"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True)
+    posts = relationship("Post", secondary=post_tags, back_populates="tags")
+
+Асинхронный SQLAlchemy:
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+​
+DATABASE_URL = "postgresql+asyncpg://user:pass@localhost/db"
+​
+async_engine = create_async_engine(DATABASE_URL)
+AsyncSessionLocal = sessionmaker(
+    async_engine, class_=AsyncSession, expire_on_commit=False
+)
+​
+async def get_user_async(user_id: int):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).filter(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+Где применяется SQLAlchemy?
+SQLAlchemy используется в:
+
+Веб-фреймворки: FastAPI, Flask, Pyramid
+Enterprise приложения: Сложные бизнес-системы
+Микросервисы: Сервисы с доступом к БД
+Data Engineering: ETL процессы и пайплайны
+

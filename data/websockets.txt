@@ -1,0 +1,242 @@
+WebSockets и real-time коммуникация
+1️⃣ Как кратко ответить
+WebSocket — это протокол двусторонней связи поверх TCP, который позволяет серверу и клиенту обмениваться сообщениями в реальном времени через постоянное соединение. В отличие от HTTP, где клиент всегда инициирует запрос, WebSocket позволяет серверу отправлять данные клиенту без запроса (push). WebSocket идеален для чатов, уведомлений, игр, финансовых приложений и любых сценариев, требующих мгновенного обмена данными.
+
+2️⃣ Подробное объяснение темы
+Зачем нужен WebSocket?
+WebSocket решает проблемы HTTP:
+
+Real-time обновления: Мгновенная доставка данных
+Двусторонняя связь: Сервер может инициировать отправку
+Низкая задержка: Нет накладных расходов на установку соединения
+Экономия ресурсов: Одно соединение вместо множества запросов
+
+WebSocket vs HTTP:
+
+HTTP: Запрос → Ответ (однонаправленный)
+WebSocket: Постоянное соединение, сообщения в обе стороны
+
+Polling: Клиент спрашивает каждые N секунд
+Long Polling: Клиент ждёт ответа до таймаута
+WebSocket: Сервер сразу отправляет при появлении данных
+
+WebSocket в FastAPI:
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import List
+​
+app = FastAPI()
+​
+class ConnectionManager:
+    """Менеджер WebSocket соединений."""
+    
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+    
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+    
+    async def send_personal(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+    
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+​
+manager = ConnectionManager()
+​
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.broadcast(f"Сообщение: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        await manager.broadcast("Пользователь покинул чат")
+
+Чат с комнатами:
+
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import Dict, Set
+import json
+​
+class RoomManager:
+    """Менеджер комнат чата."""
+    
+    def __init__(self):
+        self.rooms: Dict[str, Set[WebSocket]] = {}
+    
+    async def join_room(self, room_id: str, websocket: WebSocket):
+        await websocket.accept()
+        if room_id not in self.rooms:
+            self.rooms[room_id] = set()
+        self.rooms[room_id].add(websocket)
+    
+    def leave_room(self, room_id: str, websocket: WebSocket):
+        if room_id in self.rooms:
+            self.rooms[room_id].discard(websocket)
+            if not self.rooms[room_id]:
+                del self.rooms[room_id]
+    
+    async def broadcast_to_room(self, room_id: str, message: dict):
+        if room_id in self.rooms:
+            text = json.dumps(message)
+            for connection in self.rooms[room_id]:
+                await connection.send_text(text)
+​
+room_manager = RoomManager()
+​
+@app.websocket("/ws/chat/{room_id}")
+async def chat_room(websocket: WebSocket, room_id: str, username: str):
+    await room_manager.join_room(room_id, websocket)
+    
+    await room_manager.broadcast_to_room(room_id, {
+        "type": "join",
+        "username": username,
+        "message": f"{username} присоединился к комнате"
+    })
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            await room_manager.broadcast_to_room(room_id, {
+                "type": "message",
+                "username": username,
+                "message": data["message"]
+            })
+    except WebSocketDisconnect:
+        room_manager.leave_room(room_id, websocket)
+        await room_manager.broadcast_to_room(room_id, {
+            "type": "leave",
+            "username": username,
+            "message": f"{username} покинул комнату"
+        })
+
+Аутентификация WebSocket:
+
+from fastapi import WebSocket, Query, HTTPException
+import jwt
+​
+async def get_current_user_ws(
+    websocket: WebSocket,
+    token: str = Query(...)
+):
+    """Аутентификация через query параметр."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        return await get_user(user_id)
+    except jwt.JWTError:
+        await websocket.close(code=4001)
+        raise HTTPException(status_code=401)
+​
+@app.websocket("/ws/secure")
+async def secure_websocket(
+    websocket: WebSocket,
+    token: str = Query(...)
+):
+    user = await get_current_user_ws(websocket, token)
+    await websocket.accept()
+    
+    await websocket.send_json({"message": f"Привет, {user.name}!"})
+    
+    while True:
+        data = await websocket.receive_json()
+        # Обработка сообщений
+
+Клиент на JavaScript:
+
+// Подключение к WebSocket
+const ws = new WebSocket('ws://localhost:8000/ws/chat/room1?username=John');
+​
+ws.onopen = () => {
+    console.log('Подключено');
+    ws.send(JSON.stringify({ message: 'Привет!' }));
+};
+​
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    console.log('Получено:', data);
+    
+    if (data.type === 'message') {
+        displayMessage(data.username, data.message);
+    }
+};
+​
+ws.onclose = (event) => {
+    console.log('Отключено:', event.code, event.reason);
+};
+​
+ws.onerror = (error) => {
+    console.error('Ошибка:', error);
+};
+​
+// Отправка сообщения
+function sendMessage(text) {
+    if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ message: text }));
+    }
+}
+
+Heartbeat и переподключение:
+
+import asyncio
+​
+@app.websocket("/ws/reliable")
+async def reliable_websocket(websocket: WebSocket):
+    await websocket.accept()
+    
+    async def heartbeat():
+        while True:
+            try:
+                await websocket.send_json({"type": "ping"})
+                await asyncio.sleep(30)
+            except:
+                break
+    
+    heartbeat_task = asyncio.create_task(heartbeat())
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if data.get("type") == "pong":
+                continue
+            # Обработка данных
+    except WebSocketDisconnect:
+        heartbeat_task.cancel()
+
+Масштабирование с Redis Pub/Sub:
+
+import aioredis
+​
+redis = aioredis.from_url("redis://localhost")
+​
+async def publish_message(channel: str, message: dict):
+    """Публикация сообщения в Redis."""
+    await redis.publish(channel, json.dumps(message))
+​
+async def subscribe_to_channel(channel: str, websocket: WebSocket):
+    """Подписка на канал Redis."""
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(channel)
+    
+    async for message in pubsub.listen():
+        if message["type"] == "message":
+            await websocket.send_text(message["data"])
+
+Где применяется WebSocket?
+
+Чаты: Мгновенный обмен сообщениями
+Уведомления: Push-уведомления в реальном времени
+Игры: Многопользовательские онлайн-игры
+Финансы: Котировки и биржевые данные
+Коллаборация: Совместное редактирование документов
+IoT: Данные с датчиков в реальном времени
+Мониторинг: Живые дашборды и логи
+

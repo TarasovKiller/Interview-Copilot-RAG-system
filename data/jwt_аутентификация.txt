@@ -1,0 +1,193 @@
+JWT аутентификация и авторизация
+1️⃣ Как кратко ответить
+JWT (JSON Web Token) — это компактный и самодостаточный способ безопасной передачи информации между сторонами в виде JSON-объекта. JWT состоит из трёх частей: заголовка (header), полезной нагрузки (payload) и подписи (signature). Токен подписывается секретным ключом, что позволяет проверить его подлинность. JWT широко используется для аутентификации в REST API, где после входа пользователь получает токен и передаёт его в каждом запросе.
+
+2️⃣ Подробное объяснение темы
+Что такое JWT?
+JWT — это стандарт (RFC 7519) для создания токенов доступа. Токен представляет собой строку из трёх частей, разделённых точками:
+
+header.payload.signature
+
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.
+eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.
+SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+
+Структура JWT:
+
+Header (Заголовок): Содержит тип токена и алгоритм подписи
+Payload (Полезная нагрузка): Содержит claims — утверждения о пользователе
+Signature (Подпись): Проверяет целостность токена
+
+Аутентификация vs Авторизация:
+
+Аутентификация: Проверка личности (Кто вы?)
+Авторизация: Проверка прав доступа (Что вам можно делать?)
+
+Установка библиотек:
+
+# pip install python-jose[cryptography] passlib[bcrypt]
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+from typing import Optional
+
+Настройка и создание токенов:
+
+SECRET_KEY = "your-secret-key-keep-it-secret"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+​
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+​
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Проверка пароля."""
+    return pwd_context.verify(plain_password, hashed_password)
+​
+def get_password_hash(password: str) -> str:
+    """Хэширование пароля."""
+    return pwd_context.hash(password)
+​
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Создание access токена."""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire, "type": "access"})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+​
+def create_refresh_token(data: dict) -> str:
+    """Создание refresh токена."""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+Верификация токена:
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+​
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+​
+def decode_token(token: str) -> dict:
+    """Декодирование и валидация токена."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+​
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    """Получение текущего пользователя из токена."""
+    payload = decode_token(token)
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    user = get_user_by_id(user_id)  # Функция из вашего репозитория
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+Эндпоинты аутентификации:
+
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
+​
+app = FastAPI()
+​
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+​
+class UserCreate(BaseModel):
+    email: str
+    password: str
+​
+@app.post("/register")
+def register(user_data: UserCreate):
+    """Регистрация нового пользователя."""
+    if get_user_by_email(user_data.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_password = get_password_hash(user_data.password)
+    user = create_user(email=user_data.email, password=hashed_password)
+    return {"message": "User created successfully"}
+​
+@app.post("/token", response_model=Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Вход и получение токенов."""
+    user = get_user_by_email(form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    
+    access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+​
+@app.post("/refresh")
+def refresh_tokens(refresh_token: str):
+    """Обновление токенов."""
+    payload = decode_token(refresh_token)
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    
+    user_id = payload.get("sub")
+    new_access_token = create_access_token(data={"sub": user_id})
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
+Защита эндпоинтов:
+
+@app.get("/users/me")
+def read_current_user(current_user: User = Depends(get_current_user)):
+    """Получить данные текущего пользователя."""
+    return current_user
+​
+@app.get("/protected")
+def protected_route(current_user: User = Depends(get_current_user)):
+    """Защищённый маршрут."""
+    return {"message": f"Hello, {current_user.email}!"}
+
+Авторизация по ролям:
+
+from enum import Enum
+​
+class Role(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+    MODERATOR = "moderator"
+​
+def require_role(required_roles: list[Role]):
+    """Декоратор для проверки роли."""
+    def role_checker(current_user: User = Depends(get_current_user)):
+        if current_user.role not in required_roles:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        return current_user
+    return role_checker
+​
+@app.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    current_user: User = Depends(require_role([Role.ADMIN]))
+):
+    """Удаление пользователя (только для админов)."""
+    return {"message": f"User {user_id} deleted"}
+
+Где применяется JWT?
+
+REST API: Аутентификация в stateless API
+Микросервисы: Передача идентификации между сервисами
+Single Sign-On: Единый вход в несколько приложений
+Мобильные приложения: Безопасное хранение сессии
+

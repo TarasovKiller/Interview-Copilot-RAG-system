@@ -1,0 +1,164 @@
+Контекстные менеджеры в Python
+1️⃣ Как кратко ответить
+Контекстный менеджер в Python — это объект, который управляет ресурсами (файлы, соединения, блокировки) с помощью конструкции with. Он автоматически выполняет настройку перед входом в блок кода и очистку после выхода, даже если произошло исключение. Контекстные менеджеры реализуются через методы __enter__() и __exit__() или с помощью декоратора @contextmanager.
+
+2️⃣ Подробное объяснение темы
+Что такое контекстный менеджер?
+Контекстный менеджер — это объект, который определяет контекст выполнения для блока кода. Он гарантирует, что ресурсы будут правильно инициализированы перед использованием и освобождены после, независимо от того, как завершился блок — нормально или с исключением.
+
+Зачем нужны контекстные менеджеры?
+Контекстные менеджеры помогают:
+
+Автоматически освобождать ресурсы: Файлы закрываются, соединения разрываются
+Избежать утечек ресурсов: Даже при исключениях ресурсы будут освобождены
+Писать более чистый код: Убирается boilerplate-код try/finally
+Следовать принципу RAII: Resource Acquisition Is Initialization
+
+Базовое использование with:
+
+# Без контекстного менеджера
+file = open('data.txt', 'r')
+try:
+    content = file.read()
+finally:
+    file.close()
+​
+# С контекстным менеджером
+with open('data.txt', 'r') as file:
+    content = file.read()
+# Файл автоматически закрывается
+
+Как работает контекстный менеджер?
+Контекстный менеджер должен реализовывать два метода:
+
+__enter__() — вызывается при входе в блок with, возвращает ресурс
+__exit__() — вызывается при выходе из блока, освобождает ресурс
+
+Создание собственного контекстного менеджера:
+
+class FileManager:
+    def __init__(self, filename, mode):
+        self.filename = filename
+        self.mode = mode
+        self.file = None
+    
+    def __enter__(self):
+        print(f"Открываем файл {self.filename}")
+        self.file = open(self.filename, self.mode)
+        return self.file
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        print(f"Закрываем файл {self.filename}")
+        if self.file:
+            self.file.close()
+        return False  # Не подавляем исключения
+​
+with FileManager('test.txt', 'w') as f:
+    f.write('Привет, мир!')
+# Вывод:
+# Открываем файл test.txt
+# Закрываем файл test.txt
+
+Обработка исключений в __exit__:
+Метод __exit__ получает информацию об исключении через три параметра:
+
+exc_type — тип исключения
+exc_value — значение исключения
+traceback — объект traceback
+
+class SafeDivision:
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is ZeroDivisionError:
+            print("Обнаружено деление на ноль!")
+            return True  # Подавляем исключение
+        return False
+    
+    def divide(self, a, b):
+        return a / b
+​
+with SafeDivision() as sd:
+    result = sd.divide(10, 0)
+    print(result)  # Не выполнится
+print("Программа продолжается")
+# Вывод:
+# Обнаружено деление на ноль!
+# Программа продолжается
+
+Использование contextlib:
+Модуль contextlib предоставляет удобные инструменты для создания контекстных менеджеров.
+
+Декоратор @contextmanager:
+
+from contextlib import contextmanager
+​
+@contextmanager
+def timer():
+    import time
+    start = time.time()
+    yield
+    end = time.time()
+    print(f"Время выполнения: {end - start:.2f} сек")
+​
+with timer():
+    sum(range(1000000))
+# Вывод: Время выполнения: 0.05 сек
+
+Множественные контекстные менеджеры:
+Можно использовать несколько контекстных менеджеров в одном with:
+
+with open('input.txt', 'r') as infile, open('output.txt', 'w') as outfile:
+    content = infile.read()
+    outfile.write(content.upper())
+
+Полезные контекстные менеджеры из contextlib:
+
+from contextlib import suppress, redirect_stdout
+import io
+​
+# suppress — подавление исключений
+with suppress(FileNotFoundError):
+    with open('несуществующий_файл.txt') as f:
+        pass
+# Исключение подавлено, программа продолжается
+​
+# redirect_stdout — перенаправление вывода
+f = io.StringIO()
+with redirect_stdout(f):
+    print("Этот текст будет перехвачен")
+output = f.getvalue()
+print(f"Перехвачено: {output}")
+
+Где применяются контекстные менеджеры?
+Контекстные менеджеры используются повсеместно:
+
+Работа с файлами: Автоматическое закрытие файлов
+Базы данных: Управление соединениями и транзакциями
+Сетевые соединения: Сокеты, HTTP-соединения
+Многопоточность: Блокировки (Lock), семафоры
+Тестирование: Mock-объекты, временные директории
+Профилирование: Измерение времени выполнения
+
+Пример с базой данных:
+
+import sqlite3
+from contextlib import contextmanager
+​
+@contextmanager
+def database_connection(db_name):
+    conn = sqlite3.connect(db_name)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+​
+with database_connection('mydb.sqlite') as conn:
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+
